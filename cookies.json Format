@@ -1,0 +1,22 @@
+[
+  {
+    "name": "auth_token",
+    "value": "YOUR_AUTH_TOKEN_HERE",
+    "domain": ".twitter.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "ct0",
+    "value": "YOUR_CSRF_TOKEN",
+    "domain": ".twitter.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  }
+]

@@ -642,7 +642,22 @@ class TwitterBot {
       
       await this.page.waitForTimeout(3000);
       
-      // Simulate human scrolling
+      // ==================== ADDED: HUMAN-LIKE RANDOM SCROLLING ====================
+      console.log('🔄 Human-like random scrolling...');
+      for (let i = 0; i < 2 + Math.floor(Math.random() * 3); i++) {
+        const scrollY = 50 + Math.random() * 300;
+        await this.page.evaluate((y) => window.scrollBy(0, y), scrollY);
+        await this.page.waitForTimeout(500 + Math.random() * 1000);
+        
+        // Sometimes scroll back a little (very human behavior)
+        if (Math.random() > 0.7) {
+          await this.page.evaluate(() => window.scrollBy(0, -Math.random() * 100));
+          await this.page.waitForTimeout(200 + Math.random() * 400);
+        }
+      }
+      // ==================== END SCROLLING ====================
+      
+      // Simulate human scrolling (original)
       await this.page.evaluate(() => {
         window.scrollBy(0, 200);
       });
@@ -652,7 +667,29 @@ class TwitterBot {
       console.log('🔍 Looking for reply button...');
       const replyButton = await this.page.waitForSelector('[data-testid="reply"]', { timeout: 10000 });
       
-      // Human-like mouse movement
+      // ==================== ADDED: HUMAN MOUSE MOVEMENT ====================
+      console.log('🖱️ Simulating human mouse movement...');
+      const buttonBox = await replyButton.boundingBox();
+      if (buttonBox) {
+        // Move mouse in a curve to the button
+        await this.page.mouse.move(
+          buttonBox.x - 50 + Math.random() * 100,
+          buttonBox.y - 50 + Math.random() * 100,
+          { steps: 20 }
+        );
+        await this.page.waitForTimeout(300 + Math.random() * 500);
+        
+        // Small jitter before click (human imperfection)
+        await this.page.mouse.move(
+          buttonBox.x + Math.random() * 10,
+          buttonBox.y + Math.random() * 10,
+          { steps: 5 }
+        );
+        await this.page.waitForTimeout(100);
+      }
+      // ==================== END MOUSE MOVEMENT ====================
+      
+      // Original mouse movement (keep for backward compatibility)
       const box = await replyButton.boundingBox();
       await this.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await this.page.waitForTimeout(500);
@@ -661,10 +698,33 @@ class TwitterBot {
       await this.page.waitForTimeout(2000);
       
       // Type reply
-      console.log('⌨️ Typing reply...');
+      console.log('⌨️ Typing reply with human-like imperfections...');
       const textarea = await this.page.waitForSelector('[data-testid="tweetTextarea_0"]', { timeout: 10000 });
       await textarea.click();
       
+      // ==================== ADDED: HUMAN-LIKE TYPING PATTERN ====================
+      let typedText = '';
+      for (let char of replyText) {
+        // Random delay between keystrokes
+        const delay = Math.floor(Math.random() * 120) + 30; // 30-150ms
+        await this.page.keyboard.type(char, { delay });
+        typedText += char;
+        
+        // Random pause (like thinking)
+        if (Math.random() > 0.92) {
+          await this.page.waitForTimeout(200 + Math.random() * 800);
+        }
+        
+        // Random typo and correction (very human)
+        if (Math.random() > 0.97 && typedText.length > 3) {
+          await this.page.keyboard.press('Backspace');
+          await this.page.waitForTimeout(50 + Math.random() * 100);
+          await this.page.keyboard.type(char);
+        }
+      }
+      // ==================== END TYPING PATTERN ====================
+      
+      // Original typing (as fallback)
       // Type with human-like delays
       for (let i = 0; i < replyText.length; i++) {
         await this.page.keyboard.type(replyText[i], { 
@@ -1002,6 +1062,12 @@ async function start() {
    • ⏱️ 3-6 minute delays
    • 🌐 ${proxyRotator.proxies.length} proxies configured
    • 📈 Real-time dashboard
+
+🎯 HUMAN-LIKE BEHAVIORS (ADDED):
+   • 🖱️ Natural mouse movements
+   • ⌨️ Human typing patterns
+   • 🔄 Random scrolling
+   • ⏸️ Thinking pauses
 
 📝 USAGE:
    1. Web: Open dashboard above

@@ -1,0 +1,29 @@
+{
+  "name": "elite-twitter-bot-secure",
+  "version": "3.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node --max-old-space-size=8192 index.js",
+    "start-secure": "node --max-old-space-size=8192 secure_index.js",
+    "setup": "npm run install-playwright && node setup_cookies.js",
+    "install-playwright": "npx playwright install --with-deps chromium",
+    "test": "node test_cookies.js",
+    "gen-ssl": "openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj '/CN=localhost'"
+  },
+  "dependencies": {
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.1",
+    "express-basic-auth": "^1.2.1",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^7.2.0",
+    "playwright": "^1.57.0",
+    "sqlite3": "^5.1.7",
+    "crypto-js": "^4.2.0",
+    "https": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

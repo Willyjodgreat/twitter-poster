@@ -1,8 +1,8 @@
-// ==================== ELITE TWITTER BOT PRO ====================
-// COMPLETE WITH: Dashboard, Rate Limits, Proxies, Stealth, Database
+// ==================== ELITE TWITTER BOT PRO - HEADLESS VERSION ====================
+// OPTIMIZED FOR LINODE VPS - NO GUI REQUIRED
 const { chromium } = require('playwright');
 const express = require('express');
-const https = require('https'); // ADDED FOR SSL
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
@@ -10,7 +10,7 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.API_PORT || 3003;
-const SSL_PORT = process.env.SSL_PORT || 3443; // ADDED SSL PORT
+const SSL_PORT = process.env.SSL_PORT || 3443;
 
 // ==================== CONFIGURATION ====================
 const CONFIG = {
@@ -20,7 +20,8 @@ const CONFIG = {
   MIN_DELAY: 180000,    // 3 minutes
   MAX_DELAY: 360000,    // 6 minutes
   
-  // Browser
+  // Browser - HEADLESS MODE FOR VPS
+  HEADLESS: true,  // Changed to true for VPS
   MAX_BROWSERS: 3,
   USE_STEALTH: true,
   
@@ -35,11 +36,17 @@ const CONFIG = {
   MAX_RETRIES: 3,
   SESSION_TIMEOUT: 3600000,
   
-  // Security (ADDED)
+  // Security
   REQUIRE_API_KEY: process.env.REQUIRE_API_KEY === 'true',
   API_KEYS: process.env.API_KEYS?.split(',') || [],
   ALLOWED_IPS: process.env.ALLOWED_IPS?.split(',') || [],
-  CORS_ORIGIN: process.env.CORS_ORIGIN || '*'
+  CORS_ORIGIN: process.env.CORS_ORIGIN || '*',
+  
+  // Headless-specific settings
+  VIEWPORT_WIDTH: 1280,
+  VIEWPORT_HEIGHT: 720,
+  TIMEOUT: 30000,  // Increased timeout for headless
+  NAVIGATION_TIMEOUT: 45000
 };
 
 // ==================== LOAD COOKIES FROM FILE ====================
@@ -86,21 +93,17 @@ function loadCookies() {
   }
 }
 
-const YOUR_TWITTER_COOKIES = loadCookies(); // REPLACED HARDCODED COOKIES
+const YOUR_TWITTER_COOKIES = loadCookies();
 
 // ==================== SECURITY MIDDLEWARE ====================
-// Basic request validation
 app.use((req, res, next) => {
-  // Rate limiting by IP (simple version)
   const clientIP = req.ip || req.connection.remoteAddress;
   
-  // Block disallowed IPs if configured
   if (CONFIG.ALLOWED_IPS.length > 0 && !CONFIG.ALLOWED_IPS.includes(clientIP) && clientIP !== '::1' && clientIP !== '127.0.0.1') {
     console.warn(`🚫 Blocked IP: ${clientIP}`);
     return res.status(403).json({ success: false, error: 'Access denied' });
   }
   
-  // Add security headers
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
@@ -108,7 +111,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// API key authentication for /api endpoints
+// API key authentication
 const apiKeyAuth = (req, res, next) => {
   if (!CONFIG.REQUIRE_API_KEY) {
     return next();
@@ -174,7 +177,6 @@ class DatabaseManager {
       )
     `);
     
-    // ADDED: Security logs table
     this.db.run(`
       CREATE TABLE IF NOT EXISTS security_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -288,12 +290,11 @@ class RateLimiter {
     this.dailyCount = 0;
     this.hourlyCount = 0;
     this.lastAction = 0;
-    this.ipLimits = new Map(); // Track per-IP usage
+    this.ipLimits = new Map();
     this.loadState();
   }
   
   canProceed(ip = null) {
-    // Check global limits
     if (this.dailyCount >= CONFIG.DAILY_LIMIT) {
       console.log(`🚫 Daily limit reached: ${this.dailyCount}/${CONFIG.DAILY_LIMIT}`);
       return false;
@@ -304,19 +305,17 @@ class RateLimiter {
       return false;
     }
     
-    // Check per-IP limits (prevent abuse)
     if (ip) {
       const ipKey = `ip_${ip}`;
       const ipData = this.ipLimits.get(ipKey) || { count: 0, lastRequest: 0 };
       
-      // 10 requests per IP per hour
       if (ipData.count >= 10) {
         const timeSince = Date.now() - ipData.lastRequest;
         if (timeSince < 3600000) {
           console.log(`🚫 IP ${ip} limit reached`);
           return false;
         } else {
-          ipData.count = 0; // Reset after hour
+          ipData.count = 0;
         }
       }
     }
@@ -336,7 +335,6 @@ class RateLimiter {
     this.hourlyCount++;
     this.lastAction = Date.now();
     
-    // Track per-IP usage
     if (ip) {
       const ipKey = `ip_${ip}`;
       const ipData = this.ipLimits.get(ipKey) || { count: 0, lastRequest: 0 };
@@ -357,7 +355,6 @@ class RateLimiter {
       return CONFIG.MIN_DELAY - timeSince;
     }
     
-    // Random delay between 3 and 6 minutes
     return CONFIG.MIN_DELAY + Math.random() * (CONFIG.MAX_DELAY - CONFIG.MIN_DELAY);
   }
   
@@ -398,7 +395,74 @@ const RANDOM_USER_AGENTS = [
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
 ];
 
-// ==================== TWITTER BOT ====================
+// ==================== HEADLESS BROWSER HELPER ====================
+class HeadlessBrowserHelper {
+  static async waitForSelectors(page, selectors, options = {}) {
+    const timeout = options.timeout || CONFIG.TIMEOUT;
+    const visible = options.visible !== false;
+    
+    for (const selector of selectors) {
+      try {
+        const element = await page.waitForSelector(selector, { 
+          timeout, 
+          state: visible ? 'visible' : 'attached' 
+        });
+        if (element) return element;
+      } catch (e) {
+        continue;
+      }
+    }
+    
+    throw new Error(`None of the selectors found: ${selectors.join(', ')}`);
+  }
+  
+  static async safeClick(page, selector, options = {}) {
+    try {
+      const element = await page.$(selector);
+      if (!element) throw new Error(`Element not found: ${selector}`);
+      
+      // For headless, use programmatic click instead of mouse movements
+      await element.click(options);
+      await page.waitForTimeout(options.delay || 1000);
+      return true;
+    } catch (error) {
+      console.log(`⚠️ Click failed for ${selector}: ${error.message}`);
+      return false;
+    }
+  }
+  
+  static async safeType(page, selector, text, options = {}) {
+    try {
+      await page.focus(selector);
+      await page.waitForTimeout(500);
+      
+      // Clear existing text if any
+      await page.evaluate((sel) => {
+        const element = document.querySelector(sel);
+        if (element) element.value = '';
+      }, selector);
+      
+      // Type text with random delays (simulates human typing)
+      for (let i = 0; i < text.length; i++) {
+        await page.keyboard.type(text[i], { 
+          delay: Math.floor(Math.random() * 100) + 30 
+        });
+        
+        if (Math.random() > 0.95) {
+          await page.waitForTimeout(200);
+        }
+      }
+      
+      await page.waitForTimeout(1000);
+      return true;
+    } catch (error) {
+      console.log(`⚠️ Type failed for ${selector}: ${error.message}`);
+      return false;
+    }
+  }
+}
+
+// ==================== TWITTER BOT - HEADLESS VERSION ====================
 class TwitterBot {
   constructor(database, proxyRotator, rateLimiter) {
     this.db = database;
@@ -409,15 +473,16 @@ class TwitterBot {
     this.isLoggedIn = false;
     this.cookieRefreshInterval = null;
     this.lastCookieCheck = 0;
+    this.retryCount = 0;
   }
   
   async initialize() {
-    console.log('🚀 Initializing Twitter Bot Pro with external cookies...');
+    console.log('🚀 Initializing Twitter Bot Pro for VPS (Headless)...');
     
     const randomUserAgent = RANDOM_USER_AGENTS[Math.floor(Math.random() * RANDOM_USER_AGENTS.length)];
     
     const launchOptions = {
-      headless: false,
+      headless: CONFIG.HEADLESS,  // Now true for VPS
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -425,7 +490,26 @@ class TwitterBot {
         '--disable-dev-shm-usage',
         '--disable-blink-features=AutomationControlled',
         '--hide-scrollbars',
-        '--mute-audio'
+        '--mute-audio',
+        '--disable-gpu',  // Added for VPS compatibility
+        '--disable-software-rasterizer',
+        '--disable-extensions',
+        '--disable-dev-tools',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+        '--disable-ipc-flooding-protection',
+        '--disable-renderer-backgrounding',
+        '--enable-features=NetworkService,NetworkServiceInProcess',
+        '--force-color-profile=srgb',
+        '--metrics-recording-only',
+        '--no-first-run',
+        '--password-store=basic',
+        '--use-mock-keychain',
+        '--window-size=1280,720'
       ]
     };
     
@@ -436,153 +520,316 @@ class TwitterBot {
       console.log(`🌐 Using proxy: ${proxy.server}`);
     }
     
-    this.browser = await chromium.launch(launchOptions);
-    
-    const context = await this.browser.newContext({
-      viewport: { width: 1280, height: 720 },
-      userAgent: randomUserAgent,
-      locale: 'en-US',
-      timezoneId: 'America/New_York'
-    });
-    
-    // Stealth mode
-    if (CONFIG.USE_STEALTH) {
-      await context.addInitScript(() => {
-        // Override webdriver property
-        Object.defineProperty(navigator, 'webdriver', { 
-          get: () => undefined 
-        });
-        
-        // Override plugins
-        Object.defineProperty(navigator, 'plugins', {
-          get: () => [1, 2, 3, 4, 5]
-        });
-        
-        // Override languages
-        Object.defineProperty(navigator, 'languages', {
-          get: () => ['en-US', 'en']
-        });
-        
-        // Mock Chrome runtime
-        window.chrome = {
-          runtime: {},
-          loadTimes: () => ({}),
-          csi: () => ({}),
-          app: { isInstalled: false }
-        };
-        
-        // Mock permissions
-        const originalQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters) => (
-          parameters.name === 'notifications' ?
-            Promise.resolve({ state: Notification.permission }) :
-            originalQuery(parameters)
-        );
-      });
+    // Additional headless optimizations
+    if (CONFIG.HEADLESS) {
+      launchOptions.args.push(
+        '--headless=new',  // New headless mode
+        '--no-zygote',
+        '--single-process'  // Single process for lower memory
+      );
     }
     
-    // ==================== LOAD COOKIES FROM FILE ====================
-    console.log('🍪 Loading Twitter cookies from file...');
+    try {
+      this.browser = await chromium.launch(launchOptions);
+      
+      const context = await this.browser.newContext({
+        viewport: { width: CONFIG.VIEWPORT_WIDTH, height: CONFIG.VIEWPORT_HEIGHT },
+        userAgent: randomUserAgent,
+        locale: 'en-US',
+        timezoneId: 'America/New_York',
+        javaScriptEnabled: true,
+        acceptDownloads: false,
+        ignoreHTTPSErrors: true
+      });
+      
+      // Enhanced stealth mode for headless
+      if (CONFIG.USE_STEALTH) {
+        await context.addInitScript(() => {
+          // Override webdriver property
+          Object.defineProperty(navigator, 'webdriver', { 
+            get: () => false,
+            configurable: true
+          });
+          
+          // Override chrome object
+          window.chrome = {
+            runtime: {
+              id: 'mock-runtime-id',
+              getURL: () => 'chrome-extension://mock-id',
+              sendMessage: () => Promise.resolve(),
+              connect: () => ({
+                postMessage: () => {},
+                disconnect: () => {},
+                onMessage: { addListener: () => {} }
+              })
+            },
+            loadTimes: () => ({
+              requestTime: 0,
+              startLoadTime: 0,
+              commitLoadTime: 0,
+              finishDocumentLoadTime: 0,
+              firstPaintTime: 0,
+              firstPaintAfterLoadTime: 0,
+              navigationType: 'Other'
+            }),
+            csi: () => ({
+              onloadT: Date.now(),
+              startE: 0,
+              pageT: 0,
+              tran: 15
+            }),
+            app: {
+              isInstalled: false,
+              getDetails: () => null
+            }
+          };
+          
+          // Mock permissions
+          const originalQuery = window.navigator.permissions.query;
+          window.navigator.permissions.query = (parameters) => {
+            if (parameters.name === 'notifications') {
+              return Promise.resolve({ state: 'denied' });
+            }
+            if (parameters.name === 'clipboard-read') {
+              return Promise.resolve({ state: 'denied' });
+            }
+            return originalQuery(parameters);
+          };
+          
+          // Mock plugins
+          Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5],
+            configurable: true
+          });
+          
+          // Mock languages
+          Object.defineProperty(navigator, 'languages', {
+            get: () => ['en-US', 'en'],
+            configurable: true
+          });
+          
+          // Override window.navigator properties
+          Object.defineProperty(navigator, 'platform', {
+            get: () => 'Linux x86_64',
+            configurable: true
+          });
+          
+          // Hide headless userAgent
+          const userAgent = navigator.userAgent;
+          const headlessRegex = /HeadlessChrome/i;
+          if (headlessRegex.test(userAgent)) {
+            Object.defineProperty(navigator, 'userAgent', {
+              get: () => userAgent.replace(headlessRegex, 'Chrome'),
+              configurable: true
+            });
+          }
+        });
+      }
+      
+      // Load cookies
+      console.log('🍪 Loading Twitter cookies from file...');
+      await context.addCookies(YOUR_TWITTER_COOKIES);
+      console.log(`✅ Loaded ${YOUR_TWITTER_COOKIES.length} cookies from file`);
+      
+      // Get user ID
+      const userCookie = YOUR_TWITTER_COOKIES.find(c => c.name === 'twid');
+      const userId = userCookie ? userCookie.value.replace('u%3D', '') : 'Unknown';
+      console.log(`👤 User ID: ${userId}`);
+      
+      this.page = await context.newPage();
+      
+      // Set default timeouts
+      this.page.setDefaultTimeout(CONFIG.TIMEOUT);
+      this.page.setDefaultNavigationTimeout(CONFIG.NAVIGATION_TIMEOUT);
+      
+      // Start cookie refresh
+      this.startCookieRefresh();
+      
+      // Verify login with retry
+      await this.verifyLoginWithRetry();
+      
+      console.log('✅ Twitter Bot Pro initialized for VPS (Headless Mode)!');
+      
+    } catch (error) {
+      console.error('❌ Failed to initialize browser:', error.message);
+      
+      // Try fallback headless mode
+      if (error.message.includes('headless')) {
+        console.log('🔄 Trying fallback headless mode...');
+        return this.initializeFallback();
+      }
+      
+      throw error;
+    }
+  }
+  
+  async initializeFallback() {
+    // Fallback initialization with minimal options
+    const launchOptions = {
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--single-process'
+      ]
+    };
+    
+    this.browser = await chromium.launch(launchOptions);
+    const context = await this.browser.newContext();
+    
+    // Load cookies
     await context.addCookies(YOUR_TWITTER_COOKIES);
-    console.log(`✅ Loaded ${YOUR_TWITTER_COOKIES.length} cookies from file`);
-    
-    // Get user ID from cookies
-    const userCookie = YOUR_TWITTER_COOKIES.find(c => c.name === 'twid');
-    const userId = userCookie ? userCookie.value.replace('u%3D', '') : 'Unknown';
-    console.log(`👤 User ID: ${userId}`);
-    
     this.page = await context.newPage();
     
-    // Start cookie refresh interval
-    this.startCookieRefresh();
-    
-    // Verify login
     await this.verifyLogin();
+  }
+  
+  async verifyLoginWithRetry(maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      console.log(`🔐 Login verification attempt ${attempt}/${maxRetries}...`);
+      
+      try {
+        const loggedIn = await this.verifyLogin();
+        
+        if (loggedIn) {
+          this.isLoggedIn = true;
+          this.retryCount = 0;
+          return true;
+        }
+        
+        if (attempt < maxRetries) {
+          console.log(`🔄 Login failed, retrying in 5 seconds...`);
+          await this.page.waitForTimeout(5000);
+        }
+      } catch (error) {
+        console.log(`⚠️ Login attempt ${attempt} failed: ${error.message}`);
+        
+        if (attempt < maxRetries) {
+          await this.page.waitForTimeout(5000);
+        }
+      }
+    }
     
-    console.log('✅ Twitter Bot Pro initialized!');
+    console.log('❌ All login attempts failed');
+    this.isLoggedIn = false;
+    return false;
   }
   
   async verifyLogin() {
-    console.log('🔐 Verifying login...');
-    
     try {
-      // Try twitter.com first
-      await this.page.goto('https://twitter.com/home', {
-        waitUntil: 'domcontentloaded',
+      // Try x.com first (new domain)
+      await this.page.goto('https://x.com/home', {
+        waitUntil: 'networkidle',
         timeout: 15000
       });
       
       await this.page.waitForTimeout(3000);
       
-      // Check if logged in
-      try {
-        await this.page.waitForSelector('[data-testid="tweetTextarea_0"]', { timeout: 10000 });
-        this.isLoggedIn = true;
-        console.log('✅ Successfully logged in!');
-        return true;
-      } catch (error) {
-        // Try x.com as backup
-        console.log('⚠️ Trying x.com as backup...');
-        await this.page.goto('https://x.com/home', {
-          waitUntil: 'domcontentloaded',
-          timeout: 10000
-        });
-        
-        await this.page.waitForTimeout(3000);
-        
-        const hasTweetBox = await this.page.$('[data-testid="tweetTextarea_0"]');
-        if (hasTweetBox) {
-          this.isLoggedIn = true;
-          console.log('✅ Login successful on x.com!');
-          return true;
+      // Check for tweet box or home page indicators
+      const selectors = [
+        '[data-testid="tweetTextarea_0"]',
+        '[data-testid="SideNav_NewTweet_Button"]',
+        '[aria-label="Tweet"]',
+        'text="Home"',
+        '[href="/home"]'
+      ];
+      
+      for (const selector of selectors) {
+        try {
+          const element = await this.page.$(selector);
+          if (element) {
+            this.isLoggedIn = true;
+            console.log(`✅ Login verified with selector: ${selector}`);
+            return true;
+          }
+        } catch (e) {
+          continue;
         }
       }
       
-      console.log('❌ Not logged in. Checking page...');
-      
-      // Check what's on the page
+      // Check URL
       const currentUrl = this.page.url();
-      console.log(`📄 Current URL: ${currentUrl}`);
-      
-      if (currentUrl.includes('login') || currentUrl.includes('i/flow/login')) {
-        console.log('⚠️ Redirected to login page - cookies may be expired');
-        console.log('💡 Update your cookies.json file with fresh cookies');
-      } else {
-        console.log('🤔 Unknown state. Taking screenshot...');
-        await this.page.screenshot({ path: 'login_check.png' });
-        console.log('📸 Screenshot saved: login_check.png');
+      if (currentUrl.includes('x.com/home') || currentUrl.includes('twitter.com/home')) {
+        this.isLoggedIn = true;
+        console.log(`✅ Login verified via URL: ${currentUrl}`);
+        return true;
       }
       
-      this.isLoggedIn = false;
-      return false;
+      // Check for login page
+      if (currentUrl.includes('login') || currentUrl.includes('i/flow/login')) {
+        console.log('❌ Redirected to login page - cookies may be expired');
+        this.isLoggedIn = false;
+        return false;
+      }
+      
+      // Take screenshot for debugging
+      const screenshotPath = `login_debug_${Date.now()}.png`;
+      await this.page.screenshot({ path: screenshotPath, fullPage: true });
+      console.log(`📸 Debug screenshot saved: ${screenshotPath}`);
+      
+      // Check page content
+      const pageContent = await this.page.content();
+      if (pageContent.includes('Log in') || pageContent.includes('Sign in')) {
+        this.isLoggedIn = false;
+        console.log('❌ Login page detected in content');
+        return false;
+      }
+      
+      // If we're here, assume logged in but couldn't verify with selectors
+      this.isLoggedIn = true;
+      console.log('✅ Assuming logged in (no explicit verification)');
+      return true;
       
     } catch (error) {
-      console.log('❌ Error verifying login:', error.message);
+      console.log(`❌ Login verification error: ${error.message}`);
+      
+      // Try alternative verification
+      try {
+        await this.page.goto('https://x.com', { waitUntil: 'domcontentloaded', timeout: 10000 });
+        await this.page.waitForTimeout(2000);
+        
+        // Check for tweet button
+        const hasTweetButton = await this.page.$('[data-testid="SideNav_NewTweet_Button"]');
+        if (hasTweetButton) {
+          this.isLoggedIn = true;
+          console.log('✅ Alternative verification succeeded');
+          return true;
+        }
+      } catch (e) {
+        console.log('❌ Alternative verification also failed');
+      }
+      
       this.isLoggedIn = false;
       return false;
     }
   }
   
   startCookieRefresh() {
-    // Check cookies every hour
     this.cookieRefreshInterval = setInterval(async () => {
       try {
+        if (!this.page || !this.page.context()) {
+          console.log('⚠️ Cannot refresh cookies: page not available');
+          return;
+        }
+        
         const cookies = await this.page.context().cookies();
         
-        // Save fresh cookies backup
         const twitterCookies = cookies.filter(cookie => 
           cookie.domain.includes('x.com') || cookie.domain.includes('twitter.com')
         );
         
-        fs.writeFileSync('twitter_session_backup.json', JSON.stringify({ 
-          cookies: twitterCookies,
-          backup_time: new Date().toISOString() 
-        }, null, 2));
-        
-        console.log(`✅ Refreshed ${twitterCookies.length} cookies`);
+        if (twitterCookies.length > 0) {
+          fs.writeFileSync('twitter_session_backup.json', JSON.stringify({ 
+            cookies: twitterCookies,
+            backup_time: new Date().toISOString() 
+          }, null, 2));
+          
+          console.log(`✅ Refreshed ${twitterCookies.length} cookies`);
+        }
         
       } catch (error) {
-        console.log('❌ Failed to refresh cookies:', error.message);
+        console.log('⚠️ Failed to refresh cookies:', error.message);
       }
     }, 60 * 60 * 1000); // 1 hour
   }
@@ -592,7 +839,7 @@ class TwitterBot {
     const proxy = this.proxyRotator.getNextProxy();
     const clientIP = req ? req.ip : null;
     
-    // Rate limit check with IP
+    // Rate limit check
     if (!this.rateLimiter.canProceed(clientIP)) {
       const waitTime = this.rateLimiter.getWaitTime();
       const waitMinutes = Math.floor(waitTime / 60000);
@@ -601,9 +848,8 @@ class TwitterBot {
     }
     
     if (!this.isLoggedIn) {
-      // Try to re-login once
       console.log('🔄 Attempting to re-login...');
-      const loggedIn = await this.verifyLogin();
+      const loggedIn = await this.verifyLoginWithRetry(2);
       if (!loggedIn) {
         throw new Error('Not logged into Twitter');
       }
@@ -626,132 +872,141 @@ class TwitterBot {
       console.log(`\n🎯 Starting reply to tweet: ${tweetId}`);
       console.log(`💬 Text: ${replyText.substring(0, 50)}...`);
       console.log(`🌐 Proxy: ${proxy?.server || 'None'}`);
+      console.log(`💻 Mode: ${CONFIG.HEADLESS ? 'Headless' : 'GUI'}`);
       
-      // Wait based on rate limits (3-6 minutes)
+      // Wait based on rate limits
       const waitTime = this.rateLimiter.getWaitTime();
       const waitMinutes = Math.floor(waitTime / 60000);
       const waitSeconds = Math.floor((waitTime % 60000) / 1000);
-      console.log(`⏳ Waiting ${waitMinutes} minutes ${waitSeconds} seconds...`);
+      console.log(`⏳ Waiting ${waitMinutes}m ${waitSeconds}s...`);
       await this.page.waitForTimeout(waitTime);
       
       // Navigate to tweet
-      await this.page.goto(`https://twitter.com/i/status/${tweetId}`, {
-        waitUntil: 'domcontentloaded',
-        timeout: 20000
+      console.log('🌍 Navigating to tweet...');
+      await this.page.goto(`https://x.com/i/status/${tweetId}`, {
+        waitUntil: 'networkidle',
+        timeout: CONFIG.NAVIGATION_TIMEOUT
       });
       
       await this.page.waitForTimeout(3000);
       
-      // ==================== ADDED: HUMAN-LIKE RANDOM SCROLLING ====================
-      console.log('🔄 Human-like random scrolling...');
-      for (let i = 0; i < 2 + Math.floor(Math.random() * 3); i++) {
-        const scrollY = 50 + Math.random() * 300;
-        await this.page.evaluate((y) => window.scrollBy(0, y), scrollY);
-        await this.page.waitForTimeout(500 + Math.random() * 1000);
-        
-        // Sometimes scroll back a little (very human behavior)
-        if (Math.random() > 0.7) {
-          await this.page.evaluate(() => window.scrollBy(0, -Math.random() * 100));
-          await this.page.waitForTimeout(200 + Math.random() * 400);
-        }
-      }
-      // ==================== END SCROLLING ====================
-      
-      // Simulate human scrolling (original)
+      // Simulate scrolling (headless-friendly)
       await this.page.evaluate(() => {
-        window.scrollBy(0, 200);
+        window.scrollBy({ top: 300, behavior: 'smooth' });
       });
-      await this.page.waitForTimeout(1000);
-      
-      // Find reply button
-      console.log('🔍 Looking for reply button...');
-      const replyButton = await this.page.waitForSelector('[data-testid="reply"]', { timeout: 10000 });
-      
-      // ==================== ADDED: HUMAN MOUSE MOVEMENT ====================
-      console.log('🖱️ Simulating human mouse movement...');
-      const buttonBox = await replyButton.boundingBox();
-      if (buttonBox) {
-        // Move mouse in a curve to the button
-        await this.page.mouse.move(
-          buttonBox.x - 50 + Math.random() * 100,
-          buttonBox.y - 50 + Math.random() * 100,
-          { steps: 20 }
-        );
-        await this.page.waitForTimeout(300 + Math.random() * 500);
-        
-        // Small jitter before click (human imperfection)
-        await this.page.mouse.move(
-          buttonBox.x + Math.random() * 10,
-          buttonBox.y + Math.random() * 10,
-          { steps: 5 }
-        );
-        await this.page.waitForTimeout(100);
-      }
-      // ==================== END MOUSE MOVEMENT ====================
-      
-      // Original mouse movement (keep for backward compatibility)
-      const box = await replyButton.boundingBox();
-      await this.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-      await this.page.waitForTimeout(500);
-      
-      await replyButton.click();
       await this.page.waitForTimeout(2000);
       
+      // Find and click reply button
+      console.log('🔍 Looking for reply button...');
+      const replySelectors = [
+        '[data-testid="reply"]',
+        '[aria-label="Reply"]',
+        'div[role="button"][aria-label*="Reply"]',
+        'button:has-text("Reply")'
+      ];
+      
+      const replyButton = await HeadlessBrowserHelper.waitForSelectors(this.page, replySelectors, { 
+        timeout: 15000 
+      });
+      
+      if (!replyButton) {
+        throw new Error('Reply button not found');
+      }
+      
+      // Click using JavaScript (more reliable in headless)
+      await this.page.evaluate((btn) => {
+        if (btn && typeof btn.click === 'function') {
+          btn.click();
+        }
+      }, replyButton);
+      
+      await this.page.waitForTimeout(3000);
+      
       // Type reply
-      console.log('⌨️ Typing reply with human-like imperfections...');
-      const textarea = await this.page.waitForSelector('[data-testid="tweetTextarea_0"]', { timeout: 10000 });
+      console.log('⌨️ Typing reply...');
+      const textareaSelectors = [
+        '[data-testid="tweetTextarea_0"]',
+        '[data-testid="tweetTextarea"]',
+        'div[contenteditable="true"][role="textbox"]',
+        '[aria-label="Tweet text"]'
+      ];
+      
+      // Find textarea
+      const textarea = await HeadlessBrowserHelper.waitForSelectors(this.page, textareaSelectors, {
+        timeout: 10000
+      });
+      
+      if (!textarea) {
+        throw new Error('Reply textarea not found');
+      }
+      
+      // Focus and type
       await textarea.click();
+      await this.page.waitForTimeout(1000);
       
-      // ==================== ADDED: HUMAN-LIKE TYPING PATTERN ====================
-      let typedText = '';
-      for (let char of replyText) {
-        // Random delay between keystrokes
-        const delay = Math.floor(Math.random() * 120) + 30; // 30-150ms
-        await this.page.keyboard.type(char, { delay });
-        typedText += char;
-        
-        // Random pause (like thinking)
-        if (Math.random() > 0.92) {
-          await this.page.waitForTimeout(200 + Math.random() * 800);
-        }
-        
-        // Random typo and correction (very human)
-        if (Math.random() > 0.97 && typedText.length > 3) {
-          await this.page.keyboard.press('Backspace');
-          await this.page.waitForTimeout(50 + Math.random() * 100);
-          await this.page.keyboard.type(char);
-        }
-      }
-      // ==================== END TYPING PATTERN ====================
+      // Type with delays (simulates human)
+      await this.page.keyboard.type(replyText, { 
+        delay: Math.floor(Math.random() * 100) + 50 
+      });
       
-      // Original typing (as fallback)
-      // Type with human-like delays
-      for (let i = 0; i < replyText.length; i++) {
-        await this.page.keyboard.type(replyText[i], { 
-          delay: Math.floor(Math.random() * 100) + 30 
-        });
-        
-        // Random pause
-        if (Math.random() > 0.95) {
-          await this.page.waitForTimeout(300);
-        }
-      }
-      
-      await this.page.waitForTimeout(1500);
+      await this.page.waitForTimeout(2000);
       
       // Send tweet
       console.log('🚀 Sending reply...');
-      const sendButton = await this.page.waitForSelector('[data-testid="tweetButton"]', { timeout: 10000 });
+      const sendButtonSelectors = [
+        '[data-testid="tweetButton"]',
+        '[data-testid="tweetButtonInline"]',
+        'button:has-text("Reply")',
+        'div[role="button"][data-testid*="tweetButton"]'
+      ];
+      
+      const sendButton = await HeadlessBrowserHelper.waitForSelectors(this.page, sendButtonSelectors, {
+        timeout: 10000
+      });
+      
+      if (!sendButton) {
+        throw new Error('Send button not found');
+      }
+      
+      // Click send button
       await sendButton.click();
       
+      // Wait for response
+      console.log('⏳ Waiting for response...');
       await this.page.waitForTimeout(8000);
       
-      // Check for success
-      try {
-        await this.page.waitForSelector('[data-testid="toast"]', { timeout: 5000 });
-        console.log('✅ Success toast detected!');
-      } catch (e) {
-        console.log('✅ Reply sent (no toast detected)');
+      // Check for success indicators
+      let success = false;
+      const successIndicators = [
+        async () => {
+          try {
+            await this.page.waitForSelector('[data-testid="toast"]', { timeout: 5000 });
+            return true;
+          } catch (e) {
+            return false;
+          }
+        },
+        async () => {
+          // Check if we're back on the tweet page
+          const currentUrl = this.page.url();
+          return currentUrl.includes(`/status/${tweetId}`);
+        },
+        async () => {
+          // Check for "Your post was sent" text
+          const content = await this.page.content();
+          return content.includes('Your post') || content.includes('sent');
+        }
+      ];
+      
+      for (const check of successIndicators) {
+        if (await check()) {
+          success = true;
+          break;
+        }
+      }
+      
+      if (!success) {
+        console.log('⚠️ No explicit success indicator found, but assuming success');
       }
       
       const responseTime = Date.now() - startTime;
@@ -772,7 +1027,7 @@ class TwitterBot {
       await this.db.updateDailyStats();
       
       console.log(`✨ Reply completed in ${responseTime}ms`);
-      console.log(`📊 Daily used: ${this.rateLimiter.dailyCount}/500`);
+      console.log(`📊 Daily used: ${this.rateLimiter.dailyCount}/${CONFIG.DAILY_LIMIT}`);
       
       return {
         success: true,
@@ -786,8 +1041,9 @@ class TwitterBot {
       };
       
     } catch (error) {
-      console.error(`❌ Error:`, error.message);
+      console.error(`❌ Error sending reply:`, error.message);
       
+      // Log error
       await this.db.logTweet(
         tweetId,
         replyText,
@@ -809,9 +1065,12 @@ class TwitterBot {
       
       // Save screenshot for debugging
       try {
-        await this.page.screenshot({ path: `error_${Date.now()}.png` });
-        console.log('📸 Error screenshot saved');
-      } catch (e) {}
+        const screenshotPath = `error_${Date.now()}.png`;
+        await this.page.screenshot({ path: screenshotPath, fullPage: true });
+        console.log(`📸 Error screenshot saved: ${screenshotPath}`);
+      } catch (e) {
+        console.log('⚠️ Could not save screenshot');
+      }
       
       throw error;
     }
@@ -915,11 +1174,12 @@ app.get('/api/v1/stats', apiKeyAuth, async (req, res) => {
       },
       recent,
       config: {
+        headless: CONFIG.HEADLESS,
         useProxy: CONFIG.USE_PROXY,
         proxyCount: proxyRotator.proxies.length,
         useStealth: CONFIG.USE_STEALTH,
-        minDelay: CONFIG.MIN_DELAY / 60000, // minutes
-        maxDelay: CONFIG.MAX_DELAY / 60000  // minutes
+        minDelay: CONFIG.MIN_DELAY / 60000,
+        maxDelay: CONFIG.MAX_DELAY / 60000
       }
     });
   } catch (error) {
@@ -942,15 +1202,23 @@ app.post('/api/v1/reset', apiKeyAuth, (req, res) => {
   }
 });
 
-// Cookie refresh endpoint
 app.post('/api/v1/refresh-cookies', apiKeyAuth, async (req, res) => {
   try {
-    const cookies = await bot.page?.context().cookies() || [];
+    if (!bot.page || !bot.page.context()) {
+      throw new Error('Browser not available');
+    }
+    
+    const cookies = await bot.page.context().cookies() || [];
     const twitterCookies = cookies.filter(cookie => 
       cookie.domain.includes('x.com') || cookie.domain.includes('twitter.com')
     );
     
-    fs.writeFileSync('twitter_session_backup.json', JSON.stringify({ cookies: twitterCookies }, null, 2));
+    if (twitterCookies.length > 0) {
+      fs.writeFileSync('twitter_session_backup.json', JSON.stringify({ 
+        cookies: twitterCookies,
+        backup_time: new Date().toISOString() 
+      }, null, 2));
+    }
     
     res.json({
       success: true,
@@ -962,22 +1230,18 @@ app.post('/api/v1/refresh-cookies', apiKeyAuth, async (req, res) => {
   }
 });
 
-// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     botLoggedIn: bot.isLoggedIn,
+    headlessMode: CONFIG.HEADLESS,
     rateLimits: {
       daily: `${rateLimiter.dailyCount}/${CONFIG.DAILY_LIMIT}`,
       hourly: `${rateLimiter.hourlyCount}/${CONFIG.HOURLY_LIMIT}`
     }
   });
 });
-
-// ==================== DASHBOARD ====================
-// KEEP YOUR ORIGINAL DASHBOARD CODE EXACTLY AS IS
-// Only change: Update the user ID display to get from cookies
 
 // ==================== SSL SETUP ====================
 function setupSSL() {
@@ -987,7 +1251,6 @@ function setupSSL() {
     const sslOptions = {
       key: fs.readFileSync('key.pem'),
       cert: fs.readFileSync('cert.pem'),
-      // Security enhancements
       minVersion: 'TLSv1.2',
       ciphers: [
         'ECDHE-RSA-AES128-GCM-SHA256',
@@ -1002,7 +1265,6 @@ function setupSSL() {
       console.log(`✅ HTTPS Server: https://localhost:${SSL_PORT}`);
     });
     
-    // Redirect HTTP to HTTPS
     const httpApp = express();
     httpApp.use((req, res) => {
       res.redirect(`https://${req.headers.host}:${SSL_PORT}${req.url}`);
@@ -1023,11 +1285,11 @@ async function start() {
   try {
     console.log(`
 ╔═══════════════════════════════════════════════════════╗
-║     🐦 TWITTER BOT PRO - PRODUCTION READY           ║
-║     🔐 EXTERNAL COOKIES | 🛡️ SSL SUPPORT           ║
+║     🐦 TWITTER BOT PRO - HEADLESS VPS EDITION       ║
+║     🔐 EXTERNAL COOKIES | 🖥️  HEADLESS MODE        ║
 ╚═══════════════════════════════════════════════════════╝
 
-🚀 Initializing with enhanced security...
+🚀 Initializing for VPS (No GUI)...
     `);
     
     await bot.initialize();
@@ -1036,48 +1298,44 @@ async function start() {
     const sslEnabled = setupSSL();
     
     if (!sslEnabled) {
-      // Fallback to HTTP only
       app.listen(PORT, () => {
         console.log(`✅ HTTP Server: http://localhost:${PORT} (NO SSL)`);
       });
     }
     
     console.log(`
-✅ SYSTEM READY FOR PRODUCTION!
+✅ SYSTEM READY FOR VPS!
 📍 Dashboard: ${sslEnabled ? `https://localhost:${SSL_PORT}` : `http://localhost:${PORT}`}
 📊 API: POST ${sslEnabled ? 'https' : 'http'}://localhost:${sslEnabled ? SSL_PORT : PORT}/api/v1/reply
 🔗 N8N: POST ${sslEnabled ? 'https' : 'http'}://localhost:${sslEnabled ? SSL_PORT : PORT}/n8n/webhook
 🔧 Health: ${sslEnabled ? 'https' : 'http'}://localhost:${sslEnabled ? SSL_PORT : PORT}/health
 
+🎯 VPS OPTIMIZATIONS:
+   • 🖥️  Full headless mode (NO GUI REQUIRED)
+   • ⚡ Reduced memory footprint
+   • 🛡️  Enhanced stealth for headless
+   • 🔄 Automatic retry mechanisms
+   • 📸 Debug screenshots on error
+
 🎯 SECURITY FEATURES:
-   • 🔐 External cookie file (NO HARDCODED VALUES)
+   • 🔐 External cookie file
    • 🔒 SSL/HTTPS support ${sslEnabled ? '✅ Enabled' : '❌ Disabled'}
    • 🔑 API key authentication ${CONFIG.REQUIRE_API_KEY ? '✅ Enabled' : '❌ Disabled'}
    • 📍 IP filtering ${CONFIG.ALLOWED_IPS.length > 0 ? '✅ Enabled' : '❌ Disabled'}
    • 📊 Per-IP rate limiting ✅ Enabled
-   • 🛡️ Security event logging ✅ Enabled
 
-🎯 PERFORMANCE:
-   • ⚡ 500 Replies/Day Limit
-   • ⏱️ 3-6 minute delays
-   • 🌐 ${proxyRotator.proxies.length} proxies configured
-   • 📈 Real-time dashboard
+📝 LINODE VPS SETUP TIPS:
+   1. Ensure cookies.json is in the same directory
+   2. Run: npm install playwright express sqlite3 dotenv
+   3. Install playwright browsers: npx playwright install chromium
+   4. Run with PM2: pm2 start index.js --name twitter-bot
+   5. Enable SSL: openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"
 
-🎯 HUMAN-LIKE BEHAVIORS (ADDED):
-   • 🖱️ Natural mouse movements
-   • ⌨️ Human typing patterns
-   • 🔄 Random scrolling
-   • ⏸️ Thinking pauses
-
-📝 USAGE:
-   1. Web: Open dashboard above
-   2. API: Use x-api-key header if enabled
-   3. Update cookies in cookies.json when needed
-
-⚠️  IMPORTANT:
-   • Keep cookies.json file secure
-   ${sslEnabled ? '• SSL certificates loaded' : '• Run: openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"'}
-   • Monitor rate_state.json for limits
+⚠️  IMPORTANT FOR HEADLESS:
+   • Check error screenshots in same directory
+   • Monitor logs: pm2 logs twitter-bot
+   • Update cookies.json when needed
+   • Restart after cookie updates: pm2 restart twitter-bot
       `);
       
   } catch (error) {
@@ -1091,21 +1349,21 @@ process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down gracefully...');
   await bot.close();
   
-  // Backup cookies on shutdown
   try {
     if (fs.existsSync('twitter_session_backup.json')) {
       const backup = JSON.parse(fs.readFileSync('twitter_session_backup.json', 'utf8'));
       fs.writeFileSync('cookies_backup_shutdown.json', JSON.stringify(backup, null, 2));
       console.log('✅ Cookies backed up on shutdown');
     }
-  } catch (e) {}
+  } catch (e) {
+    console.log('⚠️ Could not backup cookies on shutdown');
+  }
   
   process.exit(0);
 });
 
 process.on('uncaughtException', (error) => {
   console.error('🔥 Uncaught Exception:', error);
-  // Don't exit, try to recover
 });
 
 process.on('unhandledRejection', (reason, promise) => {

@@ -1,16 +1,16 @@
 // ==================== ELITE TWITTER BOT PRO - HEADLESS VERSION ====================
-// OPTIMIZED FOR LINODE VPS - NO GUI REQUIRED
+// OPTIMIZED FOR LINODE VPS - NO GUI REQUIRED - ACCESSIBLE FROM ANYWHERE
 const { chromium } = require('playwright');
 const express = require('express');
 const https = require('https');
 const fs = require('fs');
-const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.API_PORT || 3003;
 const SSL_PORT = process.env.SSL_PORT || 3443;
+const HOST = '0.0.0.0'; // Changed from localhost to allow external access
 
 // ==================== CONFIGURATION ====================
 const CONFIG = {
@@ -21,7 +21,7 @@ const CONFIG = {
   MAX_DELAY: 360000,    // 6 minutes
   
   // Browser - HEADLESS MODE FOR VPS
-  HEADLESS: true,  // Changed to true for VPS
+  HEADLESS: true,
   MAX_BROWSERS: 3,
   USE_STEALTH: true,
   
@@ -45,7 +45,7 @@ const CONFIG = {
   // Headless-specific settings
   VIEWPORT_WIDTH: 1280,
   VIEWPORT_HEIGHT: 720,
-  TIMEOUT: 30000,  // Increased timeout for headless
+  TIMEOUT: 30000,
   NAVIGATION_TIMEOUT: 45000
 };
 
@@ -95,11 +95,26 @@ function loadCookies() {
 
 const YOUR_TWITTER_COOKIES = loadCookies();
 
+// ==================== CORS MIDDLEWARE ====================
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', CONFIG.CORS_ORIGIN);
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  next();
+});
+
 // ==================== SECURITY MIDDLEWARE ====================
 app.use((req, res, next) => {
-  const clientIP = req.ip || req.connection.remoteAddress;
+  const clientIP = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+  console.log(`📡 Request from IP: ${clientIP} to ${req.method} ${req.path}`);
   
-  if (CONFIG.ALLOWED_IPS.length > 0 && !CONFIG.ALLOWED_IPS.includes(clientIP) && clientIP !== '::1' && clientIP !== '127.0.0.1') {
+  if (CONFIG.ALLOWED_IPS.length > 0 && !CONFIG.ALLOWED_IPS.includes(clientIP) && clientIP !== '::1' && clientIP !== '127.0.0.1' && !clientIP.includes('192.168')) {
     console.warn(`🚫 Blocked IP: ${clientIP}`);
     return res.status(403).json({ success: false, error: 'Access denied' });
   }
@@ -421,7 +436,6 @@ class HeadlessBrowserHelper {
       const element = await page.$(selector);
       if (!element) throw new Error(`Element not found: ${selector}`);
       
-      // For headless, use programmatic click instead of mouse movements
       await element.click(options);
       await page.waitForTimeout(options.delay || 1000);
       return true;
@@ -436,13 +450,11 @@ class HeadlessBrowserHelper {
       await page.focus(selector);
       await page.waitForTimeout(500);
       
-      // Clear existing text if any
       await page.evaluate((sel) => {
         const element = document.querySelector(sel);
         if (element) element.value = '';
       }, selector);
       
-      // Type text with random delays (simulates human typing)
       for (let i = 0; i < text.length; i++) {
         await page.keyboard.type(text[i], { 
           delay: Math.floor(Math.random() * 100) + 30 
@@ -482,7 +494,7 @@ class TwitterBot {
     const randomUserAgent = RANDOM_USER_AGENTS[Math.floor(Math.random() * RANDOM_USER_AGENTS.length)];
     
     const launchOptions = {
-      headless: CONFIG.HEADLESS,  // Now true for VPS
+      headless: CONFIG.HEADLESS,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -491,7 +503,7 @@ class TwitterBot {
         '--disable-blink-features=AutomationControlled',
         '--hide-scrollbars',
         '--mute-audio',
-        '--disable-gpu',  // Added for VPS compatibility
+        '--disable-gpu',
         '--disable-software-rasterizer',
         '--disable-extensions',
         '--disable-dev-tools',
@@ -513,19 +525,17 @@ class TwitterBot {
       ]
     };
     
-    // Add proxy if enabled
     const proxy = this.proxyRotator.getNextProxy();
     if (proxy) {
       launchOptions.proxy = proxy;
       console.log(`🌐 Using proxy: ${proxy.server}`);
     }
     
-    // Additional headless optimizations
     if (CONFIG.HEADLESS) {
       launchOptions.args.push(
-        '--headless=new',  // New headless mode
+        '--headless=new',
         '--no-zygote',
-        '--single-process'  // Single process for lower memory
+        '--single-process'
       );
     }
     
@@ -542,16 +552,13 @@ class TwitterBot {
         ignoreHTTPSErrors: true
       });
       
-      // Enhanced stealth mode for headless
       if (CONFIG.USE_STEALTH) {
         await context.addInitScript(() => {
-          // Override webdriver property
           Object.defineProperty(navigator, 'webdriver', { 
             get: () => false,
             configurable: true
           });
           
-          // Override chrome object
           window.chrome = {
             runtime: {
               id: 'mock-runtime-id',
@@ -584,7 +591,6 @@ class TwitterBot {
             }
           };
           
-          // Mock permissions
           const originalQuery = window.navigator.permissions.query;
           window.navigator.permissions.query = (parameters) => {
             if (parameters.name === 'notifications') {
@@ -596,25 +602,21 @@ class TwitterBot {
             return originalQuery(parameters);
           };
           
-          // Mock plugins
           Object.defineProperty(navigator, 'plugins', {
             get: () => [1, 2, 3, 4, 5],
             configurable: true
           });
           
-          // Mock languages
           Object.defineProperty(navigator, 'languages', {
             get: () => ['en-US', 'en'],
             configurable: true
           });
           
-          // Override window.navigator properties
           Object.defineProperty(navigator, 'platform', {
             get: () => 'Linux x86_64',
             configurable: true
           });
           
-          // Hide headless userAgent
           const userAgent = navigator.userAgent;
           const headlessRegex = /HeadlessChrome/i;
           if (headlessRegex.test(userAgent)) {
@@ -626,26 +628,21 @@ class TwitterBot {
         });
       }
       
-      // Load cookies
       console.log('🍪 Loading Twitter cookies from file...');
       await context.addCookies(YOUR_TWITTER_COOKIES);
       console.log(`✅ Loaded ${YOUR_TWITTER_COOKIES.length} cookies from file`);
       
-      // Get user ID
       const userCookie = YOUR_TWITTER_COOKIES.find(c => c.name === 'twid');
       const userId = userCookie ? userCookie.value.replace('u%3D', '') : 'Unknown';
       console.log(`👤 User ID: ${userId}`);
       
       this.page = await context.newPage();
       
-      // Set default timeouts
       this.page.setDefaultTimeout(CONFIG.TIMEOUT);
       this.page.setDefaultNavigationTimeout(CONFIG.NAVIGATION_TIMEOUT);
       
-      // Start cookie refresh
       this.startCookieRefresh();
       
-      // Verify login with retry
       await this.verifyLoginWithRetry();
       
       console.log('✅ Twitter Bot Pro initialized for VPS (Headless Mode)!');
@@ -653,7 +650,6 @@ class TwitterBot {
     } catch (error) {
       console.error('❌ Failed to initialize browser:', error.message);
       
-      // Try fallback headless mode
       if (error.message.includes('headless')) {
         console.log('🔄 Trying fallback headless mode...');
         return this.initializeFallback();
@@ -664,7 +660,6 @@ class TwitterBot {
   }
   
   async initializeFallback() {
-    // Fallback initialization with minimal options
     const launchOptions = {
       headless: true,
       args: [
@@ -678,7 +673,6 @@ class TwitterBot {
     this.browser = await chromium.launch(launchOptions);
     const context = await this.browser.newContext();
     
-    // Load cookies
     await context.addCookies(YOUR_TWITTER_COOKIES);
     this.page = await context.newPage();
     
@@ -718,7 +712,6 @@ class TwitterBot {
   
   async verifyLogin() {
     try {
-      // Try x.com first (new domain)
       await this.page.goto('https://x.com/home', {
         waitUntil: 'networkidle',
         timeout: 15000
@@ -726,7 +719,6 @@ class TwitterBot {
       
       await this.page.waitForTimeout(3000);
       
-      // Check for tweet box or home page indicators
       const selectors = [
         '[data-testid="tweetTextarea_0"]',
         '[data-testid="SideNav_NewTweet_Button"]',
@@ -748,7 +740,6 @@ class TwitterBot {
         }
       }
       
-      // Check URL
       const currentUrl = this.page.url();
       if (currentUrl.includes('x.com/home') || currentUrl.includes('twitter.com/home')) {
         this.isLoggedIn = true;
@@ -756,19 +747,16 @@ class TwitterBot {
         return true;
       }
       
-      // Check for login page
       if (currentUrl.includes('login') || currentUrl.includes('i/flow/login')) {
         console.log('❌ Redirected to login page - cookies may be expired');
         this.isLoggedIn = false;
         return false;
       }
       
-      // Take screenshot for debugging
       const screenshotPath = `login_debug_${Date.now()}.png`;
       await this.page.screenshot({ path: screenshotPath, fullPage: true });
       console.log(`📸 Debug screenshot saved: ${screenshotPath}`);
       
-      // Check page content
       const pageContent = await this.page.content();
       if (pageContent.includes('Log in') || pageContent.includes('Sign in')) {
         this.isLoggedIn = false;
@@ -776,7 +764,6 @@ class TwitterBot {
         return false;
       }
       
-      // If we're here, assume logged in but couldn't verify with selectors
       this.isLoggedIn = true;
       console.log('✅ Assuming logged in (no explicit verification)');
       return true;
@@ -784,12 +771,10 @@ class TwitterBot {
     } catch (error) {
       console.log(`❌ Login verification error: ${error.message}`);
       
-      // Try alternative verification
       try {
         await this.page.goto('https://x.com', { waitUntil: 'domcontentloaded', timeout: 10000 });
         await this.page.waitForTimeout(2000);
         
-        // Check for tweet button
         const hasTweetButton = await this.page.$('[data-testid="SideNav_NewTweet_Button"]');
         if (hasTweetButton) {
           this.isLoggedIn = true;
@@ -831,7 +816,7 @@ class TwitterBot {
       } catch (error) {
         console.log('⚠️ Failed to refresh cookies:', error.message);
       }
-    }, 60 * 60 * 1000); // 1 hour
+    }, 60 * 60 * 1000);
   }
   
   async sendReply(tweetId, replyText, req = null) {
@@ -839,7 +824,6 @@ class TwitterBot {
     const proxy = this.proxyRotator.getNextProxy();
     const clientIP = req ? req.ip : null;
     
-    // Rate limit check
     if (!this.rateLimiter.canProceed(clientIP)) {
       const waitTime = this.rateLimiter.getWaitTime();
       const waitMinutes = Math.floor(waitTime / 60000);
@@ -855,7 +839,6 @@ class TwitterBot {
       }
     }
     
-    // Input validation
     if (!tweetId || typeof tweetId !== 'string') {
       throw new Error('Invalid tweet ID');
     }
@@ -874,14 +857,12 @@ class TwitterBot {
       console.log(`🌐 Proxy: ${proxy?.server || 'None'}`);
       console.log(`💻 Mode: ${CONFIG.HEADLESS ? 'Headless' : 'GUI'}`);
       
-      // Wait based on rate limits
       const waitTime = this.rateLimiter.getWaitTime();
       const waitMinutes = Math.floor(waitTime / 60000);
       const waitSeconds = Math.floor((waitTime % 60000) / 1000);
       console.log(`⏳ Waiting ${waitMinutes}m ${waitSeconds}s...`);
       await this.page.waitForTimeout(waitTime);
       
-      // Navigate to tweet
       console.log('🌍 Navigating to tweet...');
       await this.page.goto(`https://x.com/i/status/${tweetId}`, {
         waitUntil: 'networkidle',
@@ -890,13 +871,11 @@ class TwitterBot {
       
       await this.page.waitForTimeout(3000);
       
-      // Simulate scrolling (headless-friendly)
       await this.page.evaluate(() => {
         window.scrollBy({ top: 300, behavior: 'smooth' });
       });
       await this.page.waitForTimeout(2000);
       
-      // Find and click reply button
       console.log('🔍 Looking for reply button...');
       const replySelectors = [
         '[data-testid="reply"]',
@@ -913,7 +892,6 @@ class TwitterBot {
         throw new Error('Reply button not found');
       }
       
-      // Click using JavaScript (more reliable in headless)
       await this.page.evaluate((btn) => {
         if (btn && typeof btn.click === 'function') {
           btn.click();
@@ -922,7 +900,6 @@ class TwitterBot {
       
       await this.page.waitForTimeout(3000);
       
-      // Type reply
       console.log('⌨️ Typing reply...');
       const textareaSelectors = [
         '[data-testid="tweetTextarea_0"]',
@@ -931,7 +908,6 @@ class TwitterBot {
         '[aria-label="Tweet text"]'
       ];
       
-      // Find textarea
       const textarea = await HeadlessBrowserHelper.waitForSelectors(this.page, textareaSelectors, {
         timeout: 10000
       });
@@ -940,18 +916,15 @@ class TwitterBot {
         throw new Error('Reply textarea not found');
       }
       
-      // Focus and type
       await textarea.click();
       await this.page.waitForTimeout(1000);
       
-      // Type with delays (simulates human)
       await this.page.keyboard.type(replyText, { 
         delay: Math.floor(Math.random() * 100) + 50 
       });
       
       await this.page.waitForTimeout(2000);
       
-      // Send tweet
       console.log('🚀 Sending reply...');
       const sendButtonSelectors = [
         '[data-testid="tweetButton"]',
@@ -968,14 +941,11 @@ class TwitterBot {
         throw new Error('Send button not found');
       }
       
-      // Click send button
       await sendButton.click();
       
-      // Wait for response
       console.log('⏳ Waiting for response...');
       await this.page.waitForTimeout(8000);
       
-      // Check for success indicators
       let success = false;
       const successIndicators = [
         async () => {
@@ -987,12 +957,10 @@ class TwitterBot {
           }
         },
         async () => {
-          // Check if we're back on the tweet page
           const currentUrl = this.page.url();
           return currentUrl.includes(`/status/${tweetId}`);
         },
         async () => {
-          // Check for "Your post was sent" text
           const content = await this.page.content();
           return content.includes('Your post') || content.includes('sent');
         }
@@ -1011,10 +979,8 @@ class TwitterBot {
       
       const responseTime = Date.now() - startTime;
       
-      // Update rate limits
       this.rateLimiter.recordAction(clientIP);
       
-      // Log to database
       await this.db.logTweet(
         tweetId,
         replyText,
@@ -1043,7 +1009,6 @@ class TwitterBot {
     } catch (error) {
       console.error(`❌ Error sending reply:`, error.message);
       
-      // Log error
       await this.db.logTweet(
         tweetId,
         replyText,
@@ -1053,7 +1018,6 @@ class TwitterBot {
         proxy?.server
       );
       
-      // Log security event
       if (req) {
         await this.db.logSecurityEvent(
           req.ip,
@@ -1063,7 +1027,6 @@ class TwitterBot {
         );
       }
       
-      // Save screenshot for debugging
       try {
         const screenshotPath = `error_${Date.now()}.png`;
         await this.page.screenshot({ path: screenshotPath, fullPage: true });
@@ -1126,7 +1089,6 @@ app.post('/api/v1/reply', apiKeyAuth, async (req, res) => {
   }
 });
 
-// N8N Webhook
 app.post('/n8n/webhook', apiKeyAuth, async (req, res) => {
   try {
     console.log('📥 N8N Webhook received:', req.body);
@@ -1261,17 +1223,20 @@ function setupSSL() {
       honorCipherOrder: true
     };
     
-    https.createServer(sslOptions, app).listen(SSL_PORT, () => {
-      console.log(`✅ HTTPS Server: https://localhost:${SSL_PORT}`);
+    https.createServer(sslOptions, app).listen(SSL_PORT, HOST, () => {
+      console.log(`✅ HTTPS Server accessible at: https://YOUR_VPS_IP:${SSL_PORT}`);
+      console.log(`   Or locally: https://localhost:${SSL_PORT}`);
     });
     
     const httpApp = express();
     httpApp.use((req, res) => {
-      res.redirect(`https://${req.headers.host}:${SSL_PORT}${req.url}`);
+      const host = req.headers.host || 'localhost';
+      res.redirect(`https://${host.split(':')[0]}:${SSL_PORT}${req.url}`);
     });
     
-    httpApp.listen(PORT, () => {
-      console.log(`✅ HTTP→HTTPS Redirect: http://localhost:${PORT}`);
+    httpApp.listen(PORT, HOST, () => {
+      console.log(`✅ HTTP→HTTPS Redirect: http://YOUR_VPS_IP:${PORT}`);
+      console.log(`   Or locally: http://localhost:${PORT}`);
     });
     
     return true;
@@ -1286,7 +1251,7 @@ async function start() {
     console.log(`
 ╔═══════════════════════════════════════════════════════╗
 ║     🐦 TWITTER BOT PRO - HEADLESS VPS EDITION       ║
-║     🔐 EXTERNAL COOKIES | 🖥️  HEADLESS MODE        ║
+║     🔐 EXTERNAL COOKIES | 🌐 ACCESSIBLE ANYWHERE    ║
 ╚═══════════════════════════════════════════════════════╝
 
 🚀 Initializing for VPS (No GUI)...
@@ -1294,48 +1259,53 @@ async function start() {
     
     await bot.initialize();
     
-    // Try to setup SSL
     const sslEnabled = setupSSL();
     
     if (!sslEnabled) {
-      app.listen(PORT, () => {
-        console.log(`✅ HTTP Server: http://localhost:${PORT} (NO SSL)`);
+      app.listen(PORT, HOST, () => {
+        console.log(`✅ HTTP Server accessible at: http://YOUR_VPS_IP:${PORT}`);
+        console.log(`   Or locally: http://localhost:${PORT}`);
       });
     }
     
     console.log(`
-✅ SYSTEM READY FOR VPS!
-📍 Dashboard: ${sslEnabled ? `https://localhost:${SSL_PORT}` : `http://localhost:${PORT}`}
-📊 API: POST ${sslEnabled ? 'https' : 'http'}://localhost:${sslEnabled ? SSL_PORT : PORT}/api/v1/reply
-🔗 N8N: POST ${sslEnabled ? 'https' : 'http'}://localhost:${sslEnabled ? SSL_PORT : PORT}/n8n/webhook
-🔧 Health: ${sslEnabled ? 'https' : 'http'}://localhost:${sslEnabled ? SSL_PORT : PORT}/health
+✅ SYSTEM READY FOR EXTERNAL ACCESS!
+📍 Dashboard: ${sslEnabled ? `https://YOUR_VPS_IP:${SSL_PORT}` : `http://YOUR_VPS_IP:${PORT}`}
+📊 API: POST ${sslEnabled ? 'https' : 'http'}://YOUR_VPS_IP:${sslEnabled ? SSL_PORT : PORT}/api/v1/reply
+🔗 N8N: POST ${sslEnabled ? 'https' : 'http'}://YOUR_VPS_IP:${sslEnabled ? SSL_PORT : PORT}/n8n/webhook
+🔧 Health: ${sslEnabled ? 'https' : 'http'}://YOUR_VPS_IP:${sslEnabled ? SSL_PORT : PORT}/health
+
+🌐 ACCESS FROM ANYWHERE:
+   • Replace YOUR_VPS_IP with your server's actual IP address
+   • Configure firewall to allow ports ${PORT} and ${SSL_PORT}
+   • For Linode: Check Network tab for your public IPv4
 
 🎯 VPS OPTIMIZATIONS:
-   • 🖥️  Full headless mode (NO GUI REQUIRED)
+   • 🌐 Listening on 0.0.0.0 (all network interfaces)
+   • 🖥️  Full headless mode
    • ⚡ Reduced memory footprint
    • 🛡️  Enhanced stealth for headless
    • 🔄 Automatic retry mechanisms
    • 📸 Debug screenshots on error
 
-🎯 SECURITY FEATURES:
-   • 🔐 External cookie file
-   • 🔒 SSL/HTTPS support ${sslEnabled ? '✅ Enabled' : '❌ Disabled'}
-   • 🔑 API key authentication ${CONFIG.REQUIRE_API_KEY ? '✅ Enabled' : '❌ Disabled'}
-   • 📍 IP filtering ${CONFIG.ALLOWED_IPS.length > 0 ? '✅ Enabled' : '❌ Disabled'}
-   • 📊 Per-IP rate limiting ✅ Enabled
+🔒 SECURITY NOTE:
+   • API key authentication ${CONFIG.REQUIRE_API_KEY ? '✅ Enabled' : '❌ Disabled'}
+   • IP filtering ${CONFIG.ALLOWED_IPS.length > 0 ? '✅ Enabled' : '❌ Disabled'}
+   • CORS: ${CONFIG.CORS_ORIGIN}
+   • SSL/HTTPS ${sslEnabled ? '✅ Enabled' : '❌ Disabled (use reverse proxy)'}
 
-📝 LINODE VPS SETUP TIPS:
-   1. Ensure cookies.json is in the same directory
-   2. Run: npm install playwright express sqlite3 dotenv
-   3. Install playwright browsers: npx playwright install chromium
-   4. Run with PM2: pm2 start index.js --name twitter-bot
-   5. Enable SSL: openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"
+📝 QUICK START:
+   1. Update .env with your settings
+   2. Add cookies.json with Twitter cookies
+   3. Run: npm install
+   4. Install playwright: npx playwright install chromium
+   5. Start: node index.js
 
-⚠️  IMPORTANT FOR HEADLESS:
-   • Check error screenshots in same directory
-   • Monitor logs: pm2 logs twitter-bot
-   • Update cookies.json when needed
-   • Restart after cookie updates: pm2 restart twitter-bot
+⚠️  IMPORTANT:
+   • Configure firewall: sudo ufw allow ${PORT}
+   • For SSL: sudo ufw allow ${SSL_PORT}
+   • Monitor logs regularly
+   • Keep cookies.json updated
       `);
       
   } catch (error) {
